@@ -154,6 +154,9 @@
   .split div{flex:1;background:rgba(255,255,255,.04);border-radius:10px;padding:9px 6px}
   .split .sv{font-family:var(--mono);font-size:14px;font-weight:700}
   .split .sl{font-size:9.5px;color:var(--muted);margin-top:2px;letter-spacing:.02em}
+  .split input.sv-in{width:100%;background:transparent;border:none;color:var(--text);
+    font-family:var(--mono);font-size:14px;font-weight:700;text-align:center;outline:none;padding:2px 0}
+  .split input.sv-in:focus{color:var(--steel)}
   .alloc{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:13px 14px;margin-bottom:9px}
   .alloc .ar{display:flex;align-items:center;gap:10px}
   .alloc .an{flex:1;background:none;border:none;color:var(--text);font-size:14.5px;font-weight:600;padding:2px 0;outline:none}
@@ -329,8 +332,8 @@ setInterval(tick,1000); tick();
 /* ---------- plan-derived numbers the Gate reads live ---------- */
 function planStats(){
   const p=getPlan();
-  const salary=+p.salary||0, spent=allocTotal(p), save=Math.max(0,salary-spent);
-  const elss=Math.min(5000,save), sip=Math.min(25000,save-elss), emg=Math.max(0,save-sip-elss);
+  const salary=+p.salary||0, spent=allocTotal(p);
+  const sip=+p.sip||0, elss=+p.elss||0, emg=+p.emg||0, save=sip+elss+emg;
   return {salary,save,sip,elss,emg,plan:p};
 }
 const CAT_TO_BUCKET={ "Dining / food":"Grocery and food", "Parties / alcohol":"Parties, alcohol & meds" };
@@ -671,6 +674,9 @@ function renderDash(){
 const DEFAULT_PLAN = {
   v: 4,
   salary: 95000,
+  sip: 25000,
+  elss: 5000,
+  emg: 15000,
   allocations: [
     {name:"Rent", amount:18500, cats:["Bills & Fees"], kind:"", note:"Room rent — your one biggest fixed cost"},
     {name:"Electricity & maid", amount:5500, cats:[], kind:"", note:"Electricity ₹3,000 · Maid ₹2,500 (tracked under Bills)"},
@@ -681,12 +687,17 @@ const DEFAULT_PLAN = {
   ]
 };
 function getPlan(){
-  const p=store.get("plan",null);
-  if(p && p.v===DEFAULT_PLAN.v && p.allocations) return p;
-  const base=JSON.parse(JSON.stringify(DEFAULT_PLAN));
-  if(p && typeof p.salary==="number") base.salary=p.salary; // keep salary across an upgrade
-  savePlan(base);
-  return base;
+  let p=store.get("plan",null);
+  if(!p || p.v!==DEFAULT_PLAN.v || !p.allocations){
+    const base=JSON.parse(JSON.stringify(DEFAULT_PLAN));
+    if(p && typeof p.salary==="number") base.salary=p.salary; // keep salary across an upgrade
+    p=base;
+  }
+  // backfill savings targets added after this plan was first saved, without wiping custom allocations
+  let changed=false;
+  ["sip","elss","emg"].forEach(k=>{ if(typeof p[k]!=="number"){ p[k]=DEFAULT_PLAN[k]; changed=true; } });
+  if(changed) savePlan(p);
+  return p;
 }
 function savePlan(p){ store.set("plan",p); }
 const allocTotal = p => p.allocations.reduce((a,b)=>a+(+b.amount||0),0);
@@ -731,31 +742,45 @@ function renderPlan(){
   sal.oninput=()=>{ const p=getPlan(); p.salary=parseFloat(sal.value)||0; savePlan(p); renderSavePanel(p); };
 }
 
+function saveStats(plan){
+  const salary=+plan.salary||0, spent=allocTotal(plan);
+  const sip=+plan.sip||0, elss=+plan.elss||0, emg=+plan.emg||0;
+  const save=sip+elss+emg, overBy=(spent+save)-salary, bad=overBy>0;
+  const rate=salary?Math.round(save/salary*100):0;
+  return {salary,spent,sip,elss,emg,save,overBy,bad,rate};
+}
+
 function renderSavePanel(plan){
-  const spent=allocTotal(plan), save=(+plan.salary||0)-spent;
-  const rate=plan.salary? Math.round(save/plan.salary*100):0;
-  const bad=save<0;
-
-  // savings split: SIP fixed at ₹25k, ELSS ₹5k, emergency takes the rest
-  const SIP_TARGET=25000, ELSS_TARGET=5000;
-  const S=Math.max(0,save);
-  const elss=Math.min(ELSS_TARGET,S);
-  const sip=Math.min(SIP_TARGET,S-elss);
-  const emg=Math.max(0,S-sip-elss);
-
+  const st=saveStats(plan);
   document.getElementById("savePanel").innerHTML=`
-    <div class="save-panel ${bad?"bad":""}">
-      <div class="k">${bad?"Over budget":"Move on salary day"}</div>
-      <div class="v" style="${bad?"color:var(--stop)":"color:var(--go)"}">${bad?"−":""}${fmt(Math.abs(save))}</div>
-      <div class="r">${bad?"Your categories exceed salary by "+fmt(-save):rate+"% of salary — auto-transfer this first"}</div>
-      ${bad?`<div class="why">Trim a category below until this turns green.</div>`
-        :`<div class="split">
-            <div><div class="sv">${fmt(emg)}</div><div class="sl">Emergency</div></div>
-            <div><div class="sv">${fmt(sip)}</div><div class="sl">SIP</div></div>
-            <div><div class="sv">${fmt(elss)}</div><div class="sl">ELSS</div></div>
-          </div>
-          <div class="why">Set these as auto-debits for the 1st. Once the emergency fund hits ~6 months, roll it into SIP.</div>`}
+    <div class="save-panel ${st.bad?"bad":""}" id="sp-box">
+      <div class="k" id="sp-k">${st.bad?"Over budget":"Move on salary day"}</div>
+      <div class="v" id="sp-v" style="${st.bad?"color:var(--stop)":"color:var(--go)"}">${st.bad?"−":""}${fmt(st.bad?st.overBy:st.save)}</div>
+      <div class="r" id="sp-r">${st.bad?"Budgets + savings exceed salary by "+fmt(st.overBy):st.rate+"% of salary — auto-transfer this first"}</div>
+      <div class="split">
+        <div><input class="sv-in" data-k="emg" inputmode="numeric" value="${Math.round(st.emg)}"><div class="sl">Emergency</div></div>
+        <div><input class="sv-in" data-k="sip" inputmode="numeric" value="${Math.round(st.sip)}"><div class="sl">SIP</div></div>
+        <div><input class="sv-in" data-k="elss" inputmode="numeric" value="${Math.round(st.elss)}"><div class="sl">ELSS</div></div>
+      </div>
+      <div class="why" id="sp-why">${st.bad?"Trim a budget or lower a savings target until this turns green.":"Set these as auto-debits for the 1st. Once the emergency fund hits ~6 months, roll it into SIP."}</div>
     </div>`;
+  document.querySelectorAll("#savePanel .sv-in").forEach(inp=>{
+    inp.oninput=()=>{
+      const p=getPlan(); p[inp.dataset.k]=parseFloat(inp.value)||0; savePlan(p);
+      updateSaveSummary(p);
+    };
+  });
+}
+
+function updateSaveSummary(plan){
+  const st=saveStats(plan);
+  document.getElementById("sp-box").classList.toggle("bad",st.bad);
+  document.getElementById("sp-k").textContent = st.bad?"Over budget":"Move on salary day";
+  const v=document.getElementById("sp-v");
+  v.style.color = st.bad?"var(--stop)":"var(--go)";
+  v.textContent = (st.bad?"−":"")+fmt(st.bad?st.overBy:st.save);
+  document.getElementById("sp-r").textContent = st.bad?"Budgets + savings exceed salary by "+fmt(st.overBy):st.rate+"% of salary — auto-transfer this first";
+  document.getElementById("sp-why").textContent = st.bad?"Trim a budget or lower a savings target until this turns green.":"Set these as auto-debits for the 1st. Once the emergency fund hits ~6 months, roll it into SIP.";
 }
 
 function renderAllocList(plan){
