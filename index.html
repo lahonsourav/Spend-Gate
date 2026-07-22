@@ -270,7 +270,8 @@
 
     <h2>Where the rest goes</h2>
     <div id="allocList"></div>
-    <div class="hint" style="padding:8px 2px 0">These caps are fixed. Only your salary changes month to month — whatever's left after them is what you save.</div>
+    <button class="btn ghost" id="p-add" style="margin-top:2px">+ Add a budget</button>
+    <div class="hint" style="padding:8px 2px 0">Tap any name or amount to edit. New budgets are planning-only until mapped to a Cashew category.</div>
   </section>
   </section>
 </div>
@@ -725,6 +726,12 @@ function renderPlan(){
   const plan=getPlan();
   const sal=document.getElementById("p-salary");
   if(document.activeElement!==sal) sal.value=plan.salary||"";
+  renderSavePanel(plan);
+  renderAllocList(plan);
+  sal.oninput=()=>{ const p=getPlan(); p.salary=parseFloat(sal.value)||0; savePlan(p); renderSavePanel(p); };
+}
+
+function renderSavePanel(plan){
   const spent=allocTotal(plan), save=(+plan.salary||0)-spent;
   const rate=plan.salary? Math.round(save/plan.salary*100):0;
   const bad=save<0;
@@ -749,19 +756,40 @@ function renderPlan(){
           </div>
           <div class="why">Set these as auto-debits for the 1st. Once the emergency fund hits ~6 months, roll it into SIP.</div>`}
     </div>`;
+}
 
-  document.getElementById("allocList").innerHTML = plan.allocations.map(al=>`
+function renderAllocList(plan){
+  const list=document.getElementById("allocList");
+  list.innerHTML = plan.allocations.map((al,i)=>`
     <div class="alloc ${al.kind||""}">
       <div class="ar">
-        <div class="lname">${esc(al.name)} <span class="lk">🔒</span></div>
-        <div class="lamt">${fmt(+al.amount||0)}</div>
+        <input class="an" data-i="${i}" value="${esc(al.name)}" placeholder="Budget name">
+        <input class="aa" data-i="${i}" inputmode="numeric" value="${Math.round(+al.amount||0)}">
+        <button class="ax" data-i="${i}" title="Remove">×</button>
       </div>
       ${al.note?`<div class="acs">${esc(al.note)}</div>`:""}
-    </div>`).join("");
+    </div>`).join("") || `<div class="empty">No budgets yet. Add one below.</div>`;
 
-  // only salary is editable
-  sal.oninput=()=>{ const p=getPlan(); p.salary=parseFloat(sal.value)||0; savePlan(p); renderPlan(); };
+  list.querySelectorAll(".an").forEach(inp=>{
+    inp.oninput=()=>{ const p=getPlan(); p.allocations[+inp.dataset.i].name=inp.value; savePlan(p); };
+  });
+  list.querySelectorAll(".aa").forEach(inp=>{
+    inp.oninput=()=>{ const p=getPlan(); p.allocations[+inp.dataset.i].amount=parseFloat(inp.value)||0; savePlan(p); renderSavePanel(getPlan()); };
+  });
+  list.querySelectorAll(".ax").forEach(btn=>{
+    btn.onclick=()=>{ const p=getPlan(); p.allocations.splice(+btn.dataset.i,1); savePlan(p); renderPlan(); };
+  });
 }
+
+document.getElementById("p-add").onclick=()=>{
+  const p=getPlan();
+  p.allocations.push({name:"New budget",amount:0,cats:[],kind:"",note:""});
+  savePlan(p);
+  renderPlan();
+  const inputs=document.querySelectorAll("#allocList .an");
+  const last=inputs[inputs.length-1];
+  if(last){ last.focus(); last.select(); }
+};
 
 function detectBurst(big){
   if(big.length<2) return null;
